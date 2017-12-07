@@ -32,4 +32,6 @@ To install `esq` using homebrew run the following:
 
 To configure your connection to elasticsearch, run the following:
 
-`esq config --help`
+`esq config --config ~/.esq.yml`
+
+This will generate default config file in your home directory. Edit it, entering elasticsearch URL, username and password, and the fields you want to include in logs. 

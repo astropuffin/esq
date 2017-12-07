@@ -142,21 +142,56 @@ func fetchRecords(client *elastic.Client, q []string, hits chan json.RawMessage,
 	return nil
 }
 
+func record2LogString(data []byte) (string, error) {
+	fields := strings.Split(viper.GetString("fields"), ",")
+	var logRecord map[string]interface{}
+	err := json.Unmarshal(data, &logRecord)
+	if err != nil {
+		return "", err
+	}
+	var parts []string
+	for _, field := range fields {
+		keys := strings.Split(field, ".")
+		curMap := logRecord
+		gotit := false
+		var value interface{}
+		for _, key := range keys {
+			val, ok := curMap[key]
+			if ok {
+				nextMap, ok := val.(map[string]interface{})
+				if ok {
+					curMap = nextMap
+				} else {
+					gotit = true
+					value = val
+				}
+			} else {
+				gotit = false
+			}
+		}
+		if gotit {
+			switch value.(type) {
+			default:
+				parts = append(parts, fmt.Sprintf("%v", value))
+			case float64:
+				parts = append(parts, fmt.Sprintf("%f", value))
+			case string:
+				parts = append(parts, strings.TrimSpace(value))
+			}
+		}
+	}
+	return strings.Join(parts, "\t"), nil
+}
+
 func printRecords(hits chan json.RawMessage, g *errgroup.Group, ctx context.Context) error {
 	g.Go(func() error {
 
-		fields := strings.Split(viper.GetString("fields"), ",")
 		for hit := range hits {
-			var l map[string]interface{}
-			err := json.Unmarshal(hit, &l)
+			logStr, err := record2LogString(hit)
 			if err != nil {
 				continue // Deserialization failed
 			}
-			for _, field := range fields {
-				if val, ok := l[field]; ok {
-					fmt.Printf("%s ", val)
-				}
-			}
+			fmt.Printf("%s\n", logStr)
 
 			// Terminate early?
 			select {
@@ -172,7 +207,6 @@ func printRecords(hits chan json.RawMessage, g *errgroup.Group, ctx context.Cont
 
 func writeRecords(filename string, hits chan json.RawMessage, g *errgroup.Group, ctx context.Context, bar *pb.ProgressBar) error {
 	g.Go(func() error {
-		fields := strings.Split(viper.GetString("fields"), ",")
 		f, err := os.Create(filename)
 		if err != nil {
 			fmt.Println("error writing to file")
@@ -184,27 +218,15 @@ func writeRecords(filename string, hits chan json.RawMessage, g *errgroup.Group,
 		defer w.Flush()
 
 		for hit := range hits {
-			var l map[string]interface{}
-			err := json.Unmarshal(hit, &l)
+			logStr, err := record2LogString(hit)
 			if err != nil {
 				continue // Deserialization failed
 			}
-			for _, field := range fields {
-				if val, ok := l[field]; ok {
-					switch val.(type) {
-					default:
-						_, err = w.WriteString(fmt.Sprintf("%v",val) + " ")
-					case float64:
-						_, err = w.WriteString(fmt.Sprintf("%f",val) + " ")
-					}
-					if err != nil {
-						fmt.Println("error writing to file")
-						break
-					}
-				}
+			_, err = w.WriteString(fmt.Sprintf("%s\n", logStr))
+			if err != nil {
+				fmt.Println("error writing to file")
+				break
 			}
-			w.WriteString("\n")
-
 			bar.Increment()
 
 			// Terminate early?
